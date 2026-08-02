@@ -21,7 +21,7 @@ import math
 import torch
 import torch.nn as nn
 
-from src.config import GPTConfig
+from src.config import GPTConfig, cache_dir
 
 
 class CausalSelfAttention(nn.Module):
@@ -152,6 +152,7 @@ class GPT2(nn.Module):
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # shape (T)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (B, T, n_embd)
+        # 通过广播机制将位置嵌入加到 token 嵌入上，得到形状为 (B, T, n_embd) 的输入表示
         x = tok_emb + pos_emb
         # forward the transformer blocks
         for block in self.transformer.h:
@@ -187,20 +188,22 @@ class GPT2(nn.Module):
         config = GPTConfig(**config_args)
         model = GPT2(config)
 
-        # 加载 Hugging Face 官方预训练权重
-        hf_model = GPT2LMHeadModel.from_pretrained(model_name)
+        # 加载 Hugging Face 官方预训练权重，缓存目录设置为项目根目录下的 cache 文件夹
+        hf_model = GPT2LMHeadModel.from_pretrained(model_name, cache_dir=cache_dir)
         sd_hf = hf_model.state_dict()
 
-        # Hugging Face 模型额外带有 attn.bias / attn.masked_bias 两个缓冲区，
-        # 本实现使用 is_causal 原生因果掩码，不需要它们，直接过滤掉
+        # Hugging Face 模型额外带有 attn.bias / attn.masked_bias 两个缓冲区（因果掩码），
+        # 本实现使用自注册的下三角 mask buffer（self.bias），不需要它们，直接过滤掉。
+        # 注意：后缀必须带前导点（".attn.bias"），否则会误伤
+        # attn.c_attn.bias / attn.c_proj.bias 两个投影偏置，导致它们保留随机初始化值。
         keys = [
             k
             for k in sd_hf
-            if not k.endswith("attn.masked_bias") and not k.endswith("attn.bias")
+            if not k.endswith(".attn.masked_bias") and not k.endswith(".attn.bias")
         ]
 
-        # OpenAI 官方 checkpoint 中这些投影层以 Conv1D 存储（权重形状为 [out, in]），
-        # 而本地实现使用标准 nn.Linear（权重形状为 [in, out]），导入时需要转置
+        # Hugging Face 官方 checkpoint 中这些投影层以 Conv1D 存储（transformers v5 中权重形状为 [in, out]），
+        # 而本地实现使用标准 nn.Linear（权重形状为 [out, in]），导入时需要转置
         transposed = [
             "attn.c_attn.weight",
             "attn.c_proj.weight",
@@ -224,5 +227,8 @@ class GPT2(nn.Module):
                         sd_hf[k].shape == sd[k].shape
                     ), f"shape mismatch for {k}: {sd_hf[k].shape} vs {sd[k].shape}"
                     sd[k].copy_(sd_hf[k])
+
+        # 权重共享：lm_head 与 token embedding 共享参数
+        model.lm_head.weight = model.transformer.wte.weight
 
         return model
