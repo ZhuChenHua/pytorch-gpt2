@@ -12,8 +12,8 @@ GPT — Decoder-only Transformer 语言模型
 核心设计思路：
   - Pre-norm：在每个子层前做归一化，训练更稳定
   - 权重共享：token embedding 与 LM head 共享参数，减少参数量
-  - 因果掩码：F.scaled_dot_product_attention 的 is_causal=True 原生支持，
-              无需手动维护下三角 mask buffer
+  - 因果掩码：注册一个下三角 mask buffer（self.bias），
+              在 softmax 前把上三角掩为 -inf，保证自回归性质
 """
 
 import math
@@ -27,7 +27,9 @@ from src.config import GPTConfig
 class CausalSelfAttention(nn.Module):
     """
     Causal Self-Attention 模块：
-    将输入矩阵进行线性变换，得到查询（query）、键（key）和值（value）矩阵，然后计算注意力权重，并将其应用于值矩阵，最后再进行线性变换得到输出。该模块使用了因果掩码，确保每个位置只能关注到它之前的位置，从而实现自回归建模。
+    将输入线性投影为 query、key、value 三个矩阵 → 计算缩放点积注意力
+    → 施加因果掩码（每个位置只能关注自身及之前的位置，保证自回归性质）
+    → 对 value 加权求和 → 输出线性投影（c_proj）。
     """
 
     def __init__(self, config):
@@ -39,7 +41,7 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
 
-        # regularization
+        # attention hyperparameters
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         # 'bias' buffer is a lower triangular matrix
@@ -53,7 +55,7 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         # B = batch size, T = sequence length, C = embedding dimension
         B, T, C = x.size()
-        # reshape x -> (B, T, 3*C)
+        # project x -> (B, T, 3*C)
         qkv = self.c_attn(x)
         # (B, T, 3*C) -> (B, T, C)
         q, k, v = qkv.split(self.n_embd, dim=2)
@@ -67,7 +69,7 @@ class CausalSelfAttention(nn.Module):
         # causal mask
         att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))  # type: ignore
         att = torch.softmax(att, dim=-1)
-        y = att @ v  # (B, nh, T, T) x (B, nh,T, hs) -> (B, nh, T, hs)
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
         y = self.c_proj(y)
@@ -77,7 +79,9 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     """
     MLP 模块：
-    对输入进行线性变换，然后应用 GELU 激活函数，最后再进行线性变换。其中，GELU 激活函数是一种非线性函数，可以更好地捕捉输入数据的分布。在 GPT2 模型中，MLP 模块用于对每个 Block 的输出进行特征提取和表示。
+    对输入做线性变换（c_fc，特征维度放大 4 倍）→ GELU 激活 → 线性变换（c_proj，投影回原维度），
+    为模型引入非线性并扩大表示容量。GELU 采用 tanh 近似（与 OpenAI 官方实现一致），
+    是平滑可微的 ReLU 变体，能在保持非线性的同时缓解神经元"死亡"问题。
     """
 
     def __init__(self, config):
@@ -135,7 +139,9 @@ class GPT2(nn.Module):
 
     def forward(self, idx):
         """
-        前向传播函数
+        前向传播：
+        输入 token 序列 idx（形状 (B, T)），
+        返回各位置对所有 token 的 logits（形状 (B, T, vocab_size)）。
         """
         # idx is of shape (B, T)
         B, T = idx.size()
@@ -158,7 +164,8 @@ class GPT2(nn.Module):
     @classmethod
     def from_pretrained(cls, model_name):
         """
-        Loads a pre-trained GPT-2 model weights from the Hugging Face
+        从 Hugging Face Hub 加载 GPT-2 官方预训练权重，
+        返回一个参数已对齐（含 Conv1D 转置处理）的新 GPT2 模型。
         """
         assert model_name in {
             "gpt2",
@@ -179,4 +186,43 @@ class GPT2(nn.Module):
         config_args["vocab_size"] = 50257
         config = GPTConfig(**config_args)
         model = GPT2(config)
+
+        # 加载 Hugging Face 官方预训练权重
+        hf_model = GPT2LMHeadModel.from_pretrained(model_name)
+        sd_hf = hf_model.state_dict()
+
+        # Hugging Face 模型额外带有 attn.bias / attn.masked_bias 两个缓冲区，
+        # 本实现使用 is_causal 原生因果掩码，不需要它们，直接过滤掉
+        keys = [
+            k
+            for k in sd_hf
+            if not k.endswith("attn.masked_bias") and not k.endswith("attn.bias")
+        ]
+
+        # OpenAI 官方 checkpoint 中这些投影层以 Conv1D 存储（权重形状为 [out, in]），
+        # 而本地实现使用标准 nn.Linear（权重形状为 [in, out]），导入时需要转置
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
+
         sd = model.state_dict()
+        # 逐层拷贝权重，并校验名称与形状完全对齐
+        with torch.no_grad():
+            for k in keys:
+                if any(k.endswith(w) for w in transposed):
+                    # 特殊处理：Conv1D 权重需要转置
+                    assert (
+                        sd_hf[k].shape[::-1] == sd[k].shape
+                    ), f"shape mismatch for {k}: {sd_hf[k].shape} vs {sd[k].shape}"
+                    sd[k].copy_(sd_hf[k].t())
+                else:
+                    # 其余参数直接拷贝
+                    assert (
+                        sd_hf[k].shape == sd[k].shape
+                    ), f"shape mismatch for {k}: {sd_hf[k].shape} vs {sd[k].shape}"
+                    sd[k].copy_(sd_hf[k])
+
+        return model
