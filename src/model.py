@@ -23,8 +23,6 @@ import torch.nn as nn
 
 from src.config import GPTConfig
 
-config = GPTConfig()
-
 
 class CausalSelfAttention(nn.Module):
     """
@@ -134,3 +132,51 @@ class GPT2(nn.Module):
         )
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+    def forward(self, idx):
+        """
+        前向传播函数
+        """
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert (
+            T <= self.config.block_size
+        ), f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and position embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # shape (T)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the transformer blocks
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)  # (B, T, vocab_size)
+        return logits
+
+    @classmethod
+    def from_pretrained(cls, model_name):
+        """
+        Loads a pre-trained GPT-2 model weights from the Hugging Face
+        """
+        assert model_name in {
+            "gpt2",
+            "gpt2-medium",
+            "gpt2-large",
+            "gpt2-xl",
+        }
+        from transformers import GPT2LMHeadModel
+
+        # n_layer, n_head, n_embd are determined by the model_name
+        config_args = {
+            "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+            "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
+            "gpt2-large": dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
+            "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
+        }[model_name]
+        config_args["block_size"] = 1024
+        config_args["vocab_size"] = 50257
+        config = GPTConfig(**config_args)
+        model = GPT2(config)
+        sd = model.state_dict()
