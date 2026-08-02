@@ -37,6 +37,7 @@ gpt2_124m/
 ├── data/              # 数据集（如 WikiText-2 等预训练语料）
 ├── tokenizer/         # 加载的 GPT-2 BPE tokenizer 参数
 ├── model/             # 训练产出的模型 checkpoint
+├── docs/              # 技术文档（from_pretrained 权重加载原理与踩坑记录）
 ├── src/               # 核心源码
 │   ├── config.py      # GPTConfig 超参数配置（dataclass）
 │   ├── model.py       # GPT2 模型定义（注意力 / MLP / Block / GPT2）
@@ -75,6 +76,8 @@ model = GPT2.from_pretrained("gpt2")  # 或 gpt2-medium / gpt2-large / gpt2-xl
 ```
 
 > 注：OpenAI 官方 checkpoint 中的注意力与 MLP 投影层以 `Conv1D` 存储，导入到标准 `nn.Linear` 时需要转置权重，这一转换已在 `GPT2.from_pretrained` 中处理；Hugging Face 独有的 `attn.bias` / `attn.masked_bias` 缓冲区会被自动过滤。
+
+> 注：关于 `from_pretrained` 的完整加载原理（Conv1D 转置、缓冲区过滤）以及一个因后缀匹配误伤投影偏置的 bug 与修复过程，见 [docs/from_pretrained.md](docs/from_pretrained.md)。
 
 ## 模块职责
 
