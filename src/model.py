@@ -233,7 +233,4 @@ class GPT2(nn.Module):
                     ), f"shape mismatch for {k}: {sd_hf[k].shape} vs {sd[k].shape}"
                     sd[k].copy_(sd_hf[k])
 
-        # 权重共享：lm_head 与 token embedding 共享参数
-        model.lm_head.weight = model.transformer.wte.weight
-
         return model

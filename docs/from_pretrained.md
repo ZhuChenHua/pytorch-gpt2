@@ -93,8 +93,7 @@ with torch.no_grad():
             assert sd_hf[k].shape == sd[k].shape
             sd[k].copy_(sd_hf[k])
 
-# 6. 权重共享：lm_head 与 wte 绑定
-model.lm_head.weight = model.transformer.wte.weight
+# 6. （权重共享已在 __init__ 完成：lm_head 与 wte 是同一份张量，上面的拷贝会同时覆盖两者，无需再绑定）
 ```
 
 每一步都有 shape 断言兜底，任何 key 名称或形状对不上都会立刻报错，而不是静默加载出错误权重。
