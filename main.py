@@ -5,8 +5,12 @@ from torchinfo import summary
 from src.model import GPT2
 from src.config import GPTConfig
 
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+print(f"Using device: {device}")
 
-# 查看模型结构和参数量
+
 def view_model_structure():
     """
     查看模型结构和参数量。
@@ -29,7 +33,7 @@ def use_hf_pretrained_weights():
 
     model = GPT2.from_pretrained("gpt2")
     model.eval()
-    model.to("cpu")
+    model.to(device)
 
     import tiktoken
 
@@ -37,7 +41,7 @@ def use_hf_pretrained_weights():
     tokens = enc.encode("Hello, I'm a language model,")  # 这将被编码为8个token
     tokens = torch.tensor(tokens, dtype=torch.long)  # (8,)
     tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)  # (5, 8)
-    x = tokens.to("cpu")  # x is (B, T) = (5, 8)
+    x = tokens.to(device)  # x is (B, T) = (5, 8)
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     while x.size(1) < max_length:

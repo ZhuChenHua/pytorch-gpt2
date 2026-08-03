@@ -137,6 +137,11 @@ class GPT2(nn.Module):
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
+        # 权重共享：lm_head 与 token embedding 绑定同一份权重（减少参数量，124M）。
+        # 注意方向：让 wte 沿用 lm_head 的 nn.Linear 小初始化，而不是反过来——
+        # 若 lm_head 沿用 nn.Embedding 的 N(0,1) 初始化，初始 logits 会过大，loss 爆掉。
+        self.transformer.wte.weight = self.lm_head.weight
+
     def forward(self, idx):
         """
         前向传播：
