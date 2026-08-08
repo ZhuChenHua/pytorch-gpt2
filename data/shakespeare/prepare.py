@@ -2,7 +2,7 @@
 TinyShakespeare GPT-2 BPE 预处理
 ================================
 下载 TinyShakespeare 原始文本，用 GPT-2 BPE tokenizer 分词
-（vocab 50257，现代大模型标准的子词分词；字符版是每个字符一个 token）。
+（tiktoken，vocab 50257，现代大模型标准的子词分词）。
 
 输出：train.bin / val.bin（uint16 的 token id）+ meta.pkl
 
@@ -11,7 +11,6 @@ TinyShakespeare GPT-2 BPE 预处理
 
 import os
 import pickle
-import shutil
 import urllib.request
 
 import numpy as np
@@ -20,18 +19,11 @@ import tiktoken
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_FILE = os.path.join(DATA_DIR, "input.txt")
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-# 字符版已下载过同一份文本，直接复用，避免重复下载
-CHAR_INPUT = os.path.join(DATA_DIR, "..", "shakespeare_char", "input.txt")
 
 
 def ensure_input():
-    if os.path.exists(INPUT_FILE):
-        return
-    if os.path.exists(CHAR_INPUT):
-        print(f"复用 {os.path.normpath(CHAR_INPUT)}")
-        shutil.copyfile(CHAR_INPUT, INPUT_FILE)
-        return
-    urllib.request.urlretrieve(DATA_URL, INPUT_FILE)
+    if not os.path.exists(INPUT_FILE):
+        urllib.request.urlretrieve(DATA_URL, INPUT_FILE)
 
 
 def main():
@@ -40,7 +32,7 @@ def main():
         text = f.read()
     print(f"字符总数: {len(text):,}")
 
-    # GPT-2 BPE 分词（字符版则是 stoi 逐字符映射）
+    # GPT-2 BPE 分词
     enc = tiktoken.get_encoding("gpt2")
     n = len(text)
     train_ids = enc.encode(text[: int(n * 0.9)])

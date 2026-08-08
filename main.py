@@ -60,4 +60,8 @@ def use_hf_pretrained_weights():
 
 
 if __name__ == "__main__":
-    use_hf_pretrained_weights()
+    # use_hf_pretrained_weights()
+
+    from src.pretrain import main
+
+    main()
