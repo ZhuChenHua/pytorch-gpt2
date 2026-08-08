@@ -10,6 +10,9 @@ wheels/
 .venv
 cache/
 
+# 训练产出的模型参数文件（体积大、可重新训练生成）
+model/
+
 # 数据集文件（下载 / 预处理产物，可随时用 prepare.py 重新生成；源码保留跟踪）
 data/*/input.txt
 data/*/train.bin

@@ -142,6 +142,26 @@ class GPT2(nn.Module):
         # 若 lm_head 沿用 nn.Embedding 的 N(0,1) 初始化，初始 logits 会过大，loss 爆掉。
         self.transformer.wte.weight = self.lm_head.weight
 
+        # 权重初始化（GPT-2 / nanoGPT 标准做法）：
+        #   - 所有 Linear / Embedding 统一用 N(0, 0.02)（而非 PyTorch 默认的 kaiming / N(0,1)）。
+        #     默认初始化下位置嵌入 wpe 是 N(0,1)、std≈1，而共享后的 token 嵌入 wte std≈0.02，
+        #     位置信号比 token 信号大近 50 倍，初始表示几乎被位置主导。
+        #   - 残差投影 c_proj 额外用 0.02/sqrt(2*n_layer) 缩放（GPT-2 论文），
+        #     防止残差流在深层逐层累积变大。
+        # 此时 wte 与 lm_head 共享同一份权重，apply 会遍历两处各初始化一次，分布一致，无冲突。
+        self.apply(self._init_weights)
+        for pn, p in self.named_parameters():
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
     def forward(self, idx):
         """
         前向传播：
